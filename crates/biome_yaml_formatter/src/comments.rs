@@ -18,6 +18,7 @@ use biome_yaml_syntax::{
 };
 
 use crate::prelude::*;
+use crate::utils::lines_before_through_end_tokens;
 
 pub type YamlComments = Comments<YamlLanguage>;
 
@@ -164,6 +165,12 @@ fn middle_comment_region(node: &YamlSyntaxNode) -> Option<(TextSize, TextSize)> 
     }
 }
 
+/// The flow collections whose opening bracket a comment can follow
+const FLOW_COLLECTIONS: TokenSet<YamlSyntaxKind> = token_set![
+    YamlSyntaxKind::YAML_FLOW_SEQUENCE,
+    YamlSyntaxKind::YAML_FLOW_MAPPING
+];
+
 /// Handles a comment right after the opening bracket of a flow collection
 /// that sits on the line of a mapping key:
 ///
@@ -186,10 +193,7 @@ fn handle_flow_collection_open_comment(
     }
 
     let enclosing = comment.enclosing_node();
-    if !matches!(
-        enclosing.kind(),
-        YamlSyntaxKind::YAML_FLOW_SEQUENCE | YamlSyntaxKind::YAML_FLOW_MAPPING
-    ) {
+    if !FLOW_COLLECTIONS.contains(enclosing.kind()) {
         return CommentPlacement::Default(comment);
     }
 
@@ -209,11 +213,10 @@ fn handle_flow_collection_open_comment(
 
     // The collection has to start on the key's line; the entry must also be
     // the direct parent of the collection, not of some enclosing entry
-    let on_key_line = value
-        .syntax()
-        .descendants()
-        .any(|descendant| descendant == *enclosing)
-        && crate::utils::lines_before_through_end_tokens(value.syntax()) == 0;
+    let on_key_line = enclosing
+        .ancestors()
+        .any(|ancestor| ancestor == *value.syntax())
+        && lines_before_through_end_tokens(value.syntax()) == 0;
     if !on_key_line {
         return CommentPlacement::Default(comment);
     }
