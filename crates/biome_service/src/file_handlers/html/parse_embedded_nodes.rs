@@ -7,6 +7,7 @@ use crate::file_handlers::html::{EmbedParseContext, ParsedEmbed};
 use crate::file_handlers::{DocumentFileSource, ParseEmbedResult, ParseEmbeddedParams};
 use biome_css_parser::{CssModulesKind, parse_css_with_offset_and_cache};
 use biome_css_syntax::{CssLanguage, TextSize};
+use biome_html_syntax::element_ext::is_css_style_attribute_value;
 use biome_html_syntax::{
     AnyAstroDirective, AnySvelteBlock, AnySvelteBlockItem, AnySvelteDirective,
     AnySvelteDirectiveInitializerClause, AstroEmbeddedContent, HtmlAttribute,
@@ -383,6 +384,13 @@ pub(crate) fn parse_embedded_nodes(params: ParseEmbeddedParams) -> ParseEmbedRes
         // TODO: Angular support
         HtmlVariant::Angular => {}
     }
+
+    // A `style` attribute holds CSS whatever the flavour of the document, so
+    // it is collected once for every variant rather than per arm above.
+    for element in html_root.syntax().descendants() {
+        push_style_attributes(&mut ctx, &element, &mut nodes);
+    }
+
     ParseEmbedResult { nodes }
 }
 
@@ -1091,3 +1099,55 @@ fn parse_matched_embed(
 #[cfg(test)]
 #[path = "parse_embedded_nodes.tests.rs"]
 mod tests;
+
+/// Collects the `style` attributes of `element` so their declarations can be
+/// formatted as CSS.
+///
+/// The value is a bare list of declarations rather than a stylesheet, which is
+/// what [`CssEmbeddingKind::HtmlStyleAttribute`] selects.
+fn push_style_attributes(
+    ctx: &mut EmbedParseContext,
+    element: &biome_rowan::SyntaxNode<biome_html_syntax::HtmlLanguage>,
+    nodes: &mut Vec<(AnyParse, EmbedContent, DocumentFileSource)>,
+) -> Option<()> {
+    let attribute = HtmlAttribute::cast_ref(element)?;
+    let name = attribute.name().ok()?.value_token().ok()?;
+    if !name.text_trimmed().eq_ignore_ascii_case("style") {
+        return None;
+    }
+
+    let value = attribute
+        .initializer()?
+        .value()
+        .ok()?
+        .as_html_string()
+        .cloned()?;
+    let text = value.inner_string_text().ok()?;
+    if !is_css_style_attribute_value(text.text()) {
+        return None;
+    }
+
+    let content_range = text.source_range(value.value_token().ok()?.text_range());
+    let content = EmbedContent {
+        element_range: attribute.range(),
+        content_range,
+        content_offset: content_range.start(),
+        text: text.clone(),
+    };
+
+    let css_source = CssFileSource::css().with_embedding_kind(CssEmbeddingKind::HtmlStyleAttribute);
+    let doc_source = DocumentFileSource::Css(css_source);
+    let options = ctx
+        .settings
+        .parse_options::<CssLanguage>(ctx.biome_path, &doc_source);
+    let parse = parse_css_with_offset_and_cache(
+        text.text(),
+        css_source,
+        content.content_offset,
+        ctx.cache,
+        options,
+    );
+
+    nodes.push((parse.into(), content, doc_source));
+    Some(())
+}

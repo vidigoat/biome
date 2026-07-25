@@ -53,6 +53,8 @@ use biome_fs::BiomePath;
 use biome_html_analyze::{HtmlAnalyzerServices, analyze};
 use biome_html_factory::make::ident;
 use biome_html_formatter::context::SelfCloseVoidElements;
+#[cfg(feature = "html_embeds")]
+use biome_html_formatter::format_node_with_embedded_ranges;
 use biome_html_formatter::{
     HtmlFormatOptions,
     context::{IndentScriptAndStyle, WhitespaceSensitivity},
@@ -511,7 +513,11 @@ fn format_embedded(
 
     let tree = parse.syntax(&workspace_db);
     let indent_script_and_style = options.indent_script_and_style().value();
-    let mut formatted = format_node(options, &tree, true)?;
+    let embedded_ranges: std::rc::Rc<[biome_rowan::TextRange]> = embedded_nodes
+        .iter()
+        .map(|node| node.content_range(&workspace_db))
+        .collect();
+    let mut formatted = format_node_with_embedded_ranges(options, &tree, true, embedded_ranges)?;
     formatted.format_embedded(move |range| {
         let mut iter = embedded_nodes.iter();
         let snippet = iter.find(|node| node.content_range(&workspace_db) == range)?;
@@ -525,6 +531,7 @@ fn format_embedded(
                     FormatElement::Line(LineMode::Hard),
                     FormatElement::Interned(Interned::new(document.into_elements())),
                     FormatElement::Tag(Tag::EndIndent),
+                    FormatElement::Line(LineMode::Hard),
                 ];
 
                 Document::new(elements)
@@ -532,6 +539,7 @@ fn format_embedded(
                 let elements = vec![
                     FormatElement::Line(LineMode::Hard),
                     FormatElement::Interned(Interned::new(document.into_elements())),
+                    FormatElement::Line(LineMode::Hard),
                 ];
                 Document::new(elements)
             }
@@ -564,7 +572,7 @@ fn format_embedded(
                     biome_json_formatter::format_node_with_offset(json_options, &node).ok()?;
                 Some(wrap_document(formatted.into_document(), true))
             }
-            DocumentFileSource::Css(_) => {
+            DocumentFileSource::Css(file_source) => {
                 let css_options =
                     settings.format_options::<CssLanguage>(biome_path, &snippet_file_source);
                 let node = snippet
@@ -573,7 +581,17 @@ fn format_embedded(
                     .embedded_syntax::<CssLanguage>();
                 let formatted =
                     biome_css_formatter::format_node_with_offset(css_options, &node).ok()?;
-                Some(wrap_document(formatted.into_document(), true))
+                let document = formatted.into_document();
+
+                if file_source.as_embedding_kind().is_html_style_attribute() {
+                    // A `style` attribute sits on the tag rather than in a
+                    // block of its own. The HTML formatter has already put the
+                    // group and indentation around this hole, so the
+                    // declarations go in as they are.
+                    return Some(document);
+                }
+
+                Some(wrap_document(document, true))
             }
             _ => None,
         }
