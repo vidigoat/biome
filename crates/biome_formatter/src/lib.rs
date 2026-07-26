@@ -55,8 +55,8 @@ use crate::comments::{CommentStyle, Comments, SourceComment};
 pub use crate::diagnostics::{ActualStart, FormatError, InvalidDocumentError, PrintError};
 #[cfg(debug_assertions)]
 use crate::format_audit::FormatAudit;
-use crate::format_element::document::Document;
 use crate::format_element::Interned;
+use crate::format_element::document::Document;
 pub use crate::format_extensions::{
     FormatScopedOptions, FormatScopedOptionsExt, FormatWithScopedOptions,
 };
