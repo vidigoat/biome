@@ -228,7 +228,8 @@ fn convert_glob(mut pattern: String) -> Result<String, EditorconfigGlobError> {
         },
         ConvertNumericRange {
             indexes: std::ops::Range<usize>,
-            range: std::ops::Range<usize>,
+            // Signed, because `.editorconfig` allows negative bounds such as `{-1..1}`.
+            range: std::ops::Range<i64>,
         },
     }
     let mut it = pattern.bytes().enumerate();
@@ -369,7 +370,9 @@ fn convert_glob(mut pattern: String) -> Result<String, EditorconfigGlobError> {
                 pattern.insert_str(index, content);
             }
             StrOp::ConvertNumericRange { indexes, range } => {
-                let mut replacement = String::with_capacity(range.len() * 2);
+                let mut replacement = String::with_capacity(
+                    range.end.saturating_sub(range.start).max(0) as usize * 3,
+                );
                 for (i, number) in range.enumerate() {
                     if i != 0 {
                         replacement.push(',');
@@ -431,6 +434,10 @@ mod tests {
 
         assert_eq!(convert_valid_glob("{10..12}"), "**/{10,11,12}");
         assert_eq!(convert_valid_glob("{10..10}"), "**/{10}");
+
+        assert_eq!(convert_valid_glob("{-1..1}"), "**/{-1,0,1}");
+        assert_eq!(convert_valid_glob("{-3..-1}"), "**/{-3,-2,-1}");
+        assert_eq!(convert_valid_glob("{-1..-1}"), "**/{-1}");
 
         assert_eq!(convert_valid_glob(r"\{0..0}"), r"**/\{0..0\}");
         assert_eq!(convert_valid_glob("{a..b}"), r"**/\{a..b\}");
@@ -610,6 +617,19 @@ mod tests {
         assert!(is_matching(&glob, "120"));
         assert!(!is_matching(&glob, "121"));
         assert!(!is_matching(&glob, "060"));
+
+        // numeric brace range with negative bounds
+        glob = "{-1..1}.txt".parse().unwrap();
+        assert!(is_matching(&glob, "-1.txt"));
+        assert!(is_matching(&glob, "0.txt"));
+        assert!(is_matching(&glob, "1.txt"));
+        assert!(!is_matching(&glob, "2.txt"));
+        // the range is expanded, so the pattern is no longer matched literally
+        assert!(!is_matching(&glob, "{-1..1}.txt"));
+
+        glob = "{-3..-1}.txt".parse().unwrap();
+        assert!(is_matching(&glob, "-2.txt"));
+        assert!(!is_matching(&glob, "0.txt"));
 
         // alphabetical brace range: letters should not be considered for ranges
         glob = "{aardvark..antelope}".parse().unwrap();
